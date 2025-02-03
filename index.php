@@ -1,63 +1,155 @@
 <?php
+
+$logFile = 'log.txt'; // Path to the log file in the same directory as index.php
+$current_time = date('Y-m-d H:i:s');
+
+// Open the log file in append mode
+try {
+    // Open the log file in append mode
+    $fileHandle = fopen($logFile, 'a');
+    if ($fileHandle === false) {
+        throw new Exception("Unable to open log file for writing.");
+    }
+    
+    fwrite($fileHandle, $logMessage);
+    fclose($fileHandle);
+} catch (Exception $e) {
+    // Handle exception if the file couldn't be opened or written to
+    echo "Error writing to log file: " . $e->getMessage();
+}
+
+try{
+	if (!isset($_SERVER['HTTPS']) || $_SERVER['HTTPS'] !== 'on') {
+		$secure_url = "https://" . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
+		header("Location: $secure_url", true, 301);  // Permanent redirect
+		exit();
+	}
+} catch (Exception $e) {
+    // Handle potential exceptions during the redirection process
+    echo "Error during HTTPS redirection: " . $e->getMessage();
+}
+
+try {
+	header_remove("X-Powered-By");
+
+	// Security Headers
+	header('X-Content-Type-Options: nosniff');
+	header('X-XSS-Protection: 1; mode=block');
+	header("Strict-Transport-Security: max-age=31536000; includeSubDomains; preload");
+	header("Content-Security-Policy: default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; font-src 'self'; frame-src 'none'; upgrade-insecure-requests;");
+
+	// Cache Control Headers
+	header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+	header('Pragma: no-cache');
+
+	// Clickjacking Protection
+	header('X-Frame-Options: SAMEORIGIN');
+
+	// Cross-Domain Policy
+	header('X-Permitted-Cross-Domain-Policies: none');
+
+	// CORS Configuration: Restrict to specific trusted domains
+	$allowed_origins = ['https://craftscripters.xyz/', 'https://another-trusted-domain.com']; // Example trusted domains
+
+	if (isset($_SERVER['HTTP_ORIGIN']) && in_array($_SERVER['HTTP_ORIGIN'], $allowed_origins)) {
+		header("Access-Control-Allow-Origin: " . $_SERVER['HTTP_ORIGIN']);
+		header("Access-Control-Allow-Methods: GET, POST, PUT, DELETE");
+		header("Access-Control-Allow-Headers: Content-Type, Authorization");
+		header("Access-Control-Allow-Credentials: true");
+	}
+
+	// For preflight requests (OPTIONS method)
+	if ($_SERVER['REQUEST_METHOD'] == 'OPTIONS') {
+		exit(0);  // Respond with a success status to preflight requests
+	}
+} catch (Exception $e) {
+    // Handle any exception that occurs while setting headers
+    echo "Error setting headers: " . $e->getMessage();
+}
+
+try{
+	// Cookie and Session Security
+	setcookie('name', 'value', [
+		'expires' => time() + 3600, 
+		'path' => '/', 
+		'domain' => $_SERVER['HTTP_HOST'], 
+		'secure' => true, 
+		'httponly' => true, 
+		'samesite' => 'Strict' 
+	]);
+
+	session_set_cookie_params([
+		'secure' => true,  // Ensure the session cookie is only sent over HTTPS
+		'httponly' => true, // Make session cookie inaccessible to JavaScript
+		'samesite' => 'Strict' // Prevent cross-site requests
+	]);
+} catch (Exception $e) {
+    // Handle any exception that occurs while setting cookies or session parameters
+    echo "Error setting cookies or session parameters: " . $e->getMessage();
+}
+
 session_start();
 
-// Session security settings
-//ini_set('session.cookie_secure', 1); 
-//ini_set('session.cookie_httponly', 1); 
-//ini_set('session.use_only_cookies', 1); 
-//ini_set('session.cookie_samesite', 'Strict'); 
+try{
+	// Initialize session on first load
+	if (!isset($_SESSION['started'])) {
+		session_regenerate_id(true);
 
-// Initialize session on first load
-if (!isset($_SESSION['started'])) {
-    session_regenerate_id(true);
+		$_SESSION['ip_address'] = $_SERVER['REMOTE_ADDR'];
+		$_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'];
+		$_SESSION['started'] = true;
+	}
 
-    $_SESSION['ip_address'] = $_SERVER['REMOTE_ADDR'];
-    $_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'];
-    $_SESSION['started'] = true;
-}
+	// Check IP address and user-agent for session hijacking protection
+	if (isset($_SESSION['ip_address'], $_SESSION['user_agent'])) {
+		if ($_SESSION['ip_address'] !== $_SERVER['REMOTE_ADDR']) {
+			session_unset();
+			session_destroy();
+			header("Location: index.php"); 
+			exit();
+		}
 
-// Check IP address and user-agent for session hijacking protection
-if (isset($_SESSION['ip_address'], $_SESSION['user_agent'])) {
-    if ($_SESSION['ip_address'] !== $_SERVER['REMOTE_ADDR']) {
-        session_unset();
-        session_destroy();
-        header("Location: index.php"); 
-        exit();
-    }
+		if ($_SESSION['user_agent'] !== $_SERVER['HTTP_USER_AGENT']) {
+			session_unset();
+			session_destroy();
+			header("Location: index.php"); 
+			exit();
+		}
+	}
 
-    if ($_SESSION['user_agent'] !== $_SERVER['HTTP_USER_AGENT']) {
-        session_unset();
-        session_destroy();
-        header("Location: index.php"); 
-        exit();
-    }
-}
+	// Generate CSRF token if it doesn't exist
+	if (!isset($_SESSION['csrf_token'])) {
+		$_SESSION['csrf_token'] = bin2hex(random_bytes(32));
+	}
 
-// Generate CSRF token if it doesn't exist
-if (!isset($_SESSION['csrf_token'])) {
-    $_SESSION['csrf_token'] = bin2hex(random_bytes(32));
-}
+	$timeout_duration = 600; // 10 minutes
+	if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) > $timeout_duration) {
+		session_unset();
+		session_destroy();
+		header("Location: index.php");
+		exit();
+	}
 
-$timeout_duration = 600; // 10 minutes
-if (isset($_SESSION['last_activity']) && (time() - $_SESSION['last_activity']) > $timeout_duration) {
-    session_unset();
-    session_destroy();
-    header("Location: index.php");
+	// Update last activity timestamp
+	$_SESSION['last_activity'] = time();
+
+	// Enable error reporting for debugging
+	ini_set('display_errors', 1);
+	error_reporting(E_ALL);
+} catch (Exception $e) {
+    // Handle any potential exception during session handling, CSRF token generation, etc.
+    echo "An error occurred: " . $e->getMessage();
+    // Optionally, log the error for further debugging
+    $logFile = 'error_log.txt';
+    $logMessage = "[" . date('Y-m-d H:i:s') . "] Error: " . $e->getMessage() . "\n";
+    file_put_contents($logFile, $logMessage, FILE_APPEND);
     exit();
 }
 
-// Update last activity timestamp
-$_SESSION['last_activity'] = time();
-
-// Enable error reporting for debugging
-ini_set('display_errors', 1);
-error_reporting(E_ALL);
-
-
 $host = "localhost";
-$user = "root";
-$pass = "";
-$db = "hikaricare";
+$user = "u415861906_infosec2235";
+$pass = "1nrmG~9]|zkZV>/K";
+$db = "u415861906_infosec2235";
 
 $conn = new mysqli($host, $user, $pass, $db);
 if ($conn->connect_error) {
@@ -69,188 +161,298 @@ $conn->set_charset('utf8mb4');
 
 // LOGIN REQUEST
 if (isset($_POST['login'])) {
-
-    // CSRF validation
-    if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
-        die("CSRF token validation failed.");
-    }
-
-    $username = $_POST['username'];
-    $password = $_POST['password'];
-    $current_time = date("Y-m-d H:i:s");
-
-    // Block unsafe input patterns
-    $unsafe_patterns = ['/select/i', '/insert/i', '/delete/i', '/drop/i', '/--/i', '/<script>/i', '/<\/script>/i', '/<.*?>/i'];
-    foreach ($unsafe_patterns as $pattern) {
-        if (preg_match($pattern, $username) || preg_match($pattern, $password)) {
-            echo "Unsafe input detected. Please avoid using invalid characters.";
-            exit();
+    try {
+        // CSRF validation
+        if (!isset($_POST['csrf_token']) || $_POST['csrf_token'] !== $_SESSION['csrf_token']) {
+            throw new Exception("CSRF token validation failed.");
         }
-    }
 
-    // CAPTCHA verification based on failed login attempts
-    if (isset($_SESSION['show_captcha']) && $_SESSION['show_captcha']) {
-        $recaptcha_secret = '6Ld3o8MqAAAAABFh3mglNnkssLhEgBMc5JqpLKdP'; // Replace with your reCAPTCHA secret key
-        $recaptcha_response = $_POST['g-recaptcha-response'];
+        $username = trim($_POST['username']);
+        $password = trim($_POST['password']);
+        $current_time = date("Y-m-d H:i:s");
 
-        $recaptcha_verify_url = 'https://www.google.com/recaptcha/api/siteverify';
-        $data = [
-            'secret' => $recaptcha_secret,
-            'response' => $recaptcha_response
-        ];
-
-        $ch = curl_init();
-        curl_setopt($ch, CURLOPT_URL, $recaptcha_verify_url);
-        curl_setopt($ch, CURLOPT_POST, 1);
-        curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
-        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-        $response = curl_exec($ch);
-        curl_close($ch);
-
-        $recaptcha_data = json_decode($response);
-        if (!$recaptcha_data->success) {
-            die("CAPTCHA validation failed.");
-        }
-    }
-
-    // Failed login attempt check
-    $sql_failed = "SELECT * FROM failed_logins WHERE username = ?";
-    $stmt_failed = $conn->prepare($sql_failed);
-    $stmt_failed->bind_param("s", $username);
-    $stmt_failed->execute();
-    $failed_result = $stmt_failed->get_result();
-
-    $failed_attempts = 0;
-    $locked_until = null;
-
-    if ($failed_result->num_rows > 0) {
-        $failed_row = $failed_result->fetch_assoc();
-        $failed_attempts = $failed_row['failed_attempts'];
-        $locked_until = $failed_row['locked_until'];
-
-        // Check if account is locked
-        if ($locked_until && strtotime($locked_until) > time()) {
-            echo "Account locked. Try again after " . $locked_until;
-            exit();
-        } elseif ($locked_until && strtotime($locked_until) <= time()) {
-            // Reset lock time after 10 minutes
-            $sql_unlock = "UPDATE failed_logins SET failed_attempts = 0, locked_until = NULL WHERE username = ?";
-            $stmt_unlock = $conn->prepare($sql_unlock);
-            $stmt_unlock->bind_param("s", $username);
-            $stmt_unlock->execute();
-        }
-    }
-
-    // User authentication
-    $sql = "SELECT * FROM users WHERE username = ?";
-    $stmt = $conn->prepare($sql);
-    $stmt->bind_param("s", $username);
-    $stmt->execute();
-    $result = $stmt->get_result();
-
-    if ($result->num_rows > 0) {
-        $row = $result->fetch_assoc();
-        if (password_verify($password, $row['password'])) {
-            // Successful login: reset failed attempts
-            $sql_reset = "DELETE FROM failed_logins WHERE username = ?";
-            $stmt_reset = $conn->prepare($sql_reset);
-            $stmt_reset->bind_param("s", $username);
-            $stmt_reset->execute();
-
-			// Store session data in sessions table
-            $session_id = session_id();
-            $user_id = $row['user_id']; // Assuming user_id is in the users table
-            $current_time = date("Y-m-d H:i:s");
-
-            $sql_session = "INSERT INTO sessions (session_id, user_id, created_at, last_activity) VALUES (?, ?, ?, ?)";
-            $stmt_session = $conn->prepare($sql_session);
-            $stmt_session->bind_param("siss", $session_id, $user_id, $current_time, $current_time);
-            $stmt_session->execute();
-
-            session_regenerate_id(true);
-            $_SESSION['username'] = $row['username'];
-            $_SESSION['role'] = $row['role'];
-            if ($row['role'] == 'Doctor') {
-                $_SESSION['doctor_id'] = $row['user_id'];
+        // Block unsafe input patterns
+        $unsafe_patterns = ['/select/i', '/insert/i', '/delete/i', '/drop/i', '/--/i', '/<script>/i', '/<\/script>/i', '/<.*?>/i'];
+        foreach ($unsafe_patterns as $pattern) {
+            if (preg_match($pattern, $username) || preg_match($pattern, $password)) {
+                throw new Exception("Unsafe input detected for user: $username");
             }
+        }
 
-            // Redirect to dashboard
-            header("Location: index.php");
-            exit();
+		 // Context-based Access Control:
+
+		// 1. IP Address Check
+		//$user_ip = $_SERVER['REMOTE_ADDR'];
+		//$allowed_ips = ['192.168.1.1', '203.0.113.5', '192.168.254.254']; // Example IPs, you can add more
+		//if (!in_array($user_ip, $allowed_ips)) {
+			//echo "Access denied from this IP address.";
+			//exit();
+	   //}
+
+		// 2. Device Check
+		//$user_agent = $_SERVER['HTTP_USER_AGENT'];
+		//$trusted_devices = ['Chrome on Windows', 'Firefox on Mac']; // Example devices
+		//$device_trusted = false;
+		//foreach ($trusted_devices as $device) {
+		   // if (strpos($user_agent, $device) !== false) {
+			   // $device_trusted = true;
+			   // break;
+		   // }
+	   // }
+
+	   // if (!$device_trusted) {
+			//echo "Untrusted device. Please verify your device.";
+			//exit();
+	   // }
+
+        // 3. Time-Based Access Control
+        $current_hour = date("H");
+        if (($current_hour >= 23 || $current_hour < 4) && in_array($role, ['Doctor', 'Receptionist'])) {
+            throw new Exception("Access is restricted from 11 PM to 4 AM for your role.");
+        }
+
+        // CAPTCHA verification based on failed login attempts
+        if (isset($_SESSION['show_captcha']) && $_SESSION['show_captcha']) {
+            $recaptcha_secret = '6Ld3o8MqAAAAABFh3mglNnkssLhEgBMc5JqpLKdP'; // Replace with your reCAPTCHA secret key
+            $recaptcha_response = $_POST['g-recaptcha-response'];
+
+            $recaptcha_verify_url = 'https://www.google.com/recaptcha/api/siteverify';
+            $data = [
+                'secret' => $recaptcha_secret,
+                'response' => $recaptcha_response
+            ];
+
+            $ch = curl_init();
+            curl_setopt($ch, CURLOPT_URL, $recaptcha_verify_url);
+            curl_setopt($ch, CURLOPT_POST, 1);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, http_build_query($data));
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            $response = curl_exec($ch);
+            curl_close($ch);
+
+            $recaptcha_data = json_decode($response);
+            if (!$recaptcha_data->success) {
+                throw new Exception("CAPTCHA validation failed.");
+            }
+        }
+
+        $_SESSION['username'] = $username; // Save the username in session (you can add other session variables like user_id)
+        
+        // Log the successful login
+        $logMessage = "[$current_time][INFO] - User $username logged in successfully.\n";
+        $logFile = 'log.txt'; // Path to the log file
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
         } else {
-            // Invalid password: increment failed attempts
-            $failed_attempts++;
-            if ($failed_attempts >= 3) {
-                $_SESSION['show_captcha'] = true;
+            throw new Exception("Error writing to log file.");
+        }
+
+        // Failed login attempt check
+        $sql_failed = "SELECT * FROM failed_logins WHERE username = ?";
+        $stmt_failed = $conn->prepare($sql_failed);
+        if (!$stmt_failed) {
+            throw new Exception("Database error: " . $conn->error);
+        }
+        $stmt_failed->bind_param("s", $username);
+        $stmt_failed->execute();
+        $failed_result = $stmt_failed->get_result();
+
+        $failed_attempts = 0;
+        $locked_until = null;
+
+        if ($failed_result->num_rows > 0) {
+            $failed_row = $failed_result->fetch_assoc();
+            $failed_attempts = $failed_row['failed_attempts'];
+            $locked_until = $failed_row['locked_until'];
+
+            // Check if account is locked
+            if ($locked_until && strtotime($locked_until) > time()) {
+                throw new Exception("Account locked. Try again after " . $locked_until);
+            } elseif ($locked_until && strtotime($locked_until) <= time()) {
+                // Reset lock time after 10 minutes
+                $sql_unlock = "UPDATE failed_logins SET failed_attempts = 0, locked_until = NULL WHERE username = ?";
+                $stmt_unlock = $conn->prepare($sql_unlock);
+                if (!$stmt_unlock) {
+                    throw new Exception("Database error: " . $conn->error);
+                }
+                $stmt_unlock->bind_param("s", $username);
+                $stmt_unlock->execute();
             }
+        }
 
-            if ($failed_attempts >= 5) {
-                $lock_time = date("Y-m-d H:i:s", strtotime("+10 minutes"));
-                $sql_update = "INSERT INTO failed_logins (username, failed_attempts, last_failed_attempt, locked_until) 
-                               VALUES (?, ?, ?, ?) 
-                               ON DUPLICATE KEY UPDATE 
-                               failed_attempts = VALUES(failed_attempts), 
-                               last_failed_attempt = VALUES(last_failed_attempt), 
-                               locked_until = VALUES(locked_until)";
-                $stmt_update = $conn->prepare($sql_update);
-                $stmt_update->bind_param("siss", $username, $failed_attempts, $current_time, $lock_time);
-                $stmt_update->execute();
+        // User authentication
+        $sql = "SELECT * FROM users WHERE username = ?";
+        $stmt = $conn->prepare($sql);
+        if (!$stmt) {
+            throw new Exception("Database error: " . $conn->error);
+        }
+        $stmt->bind_param("s", $username);
+        $stmt->execute();
+        $result = $stmt->get_result();
 
-                echo "Account locked. Try again after " . $lock_time;
+        if ($result->num_rows > 0) {
+            $row = $result->fetch_assoc();
+            if (password_verify($password, $row['password'])) {
+                // Successful login: reset failed attempts
+                $sql_reset = "DELETE FROM failed_logins WHERE username = ?";
+                $stmt_reset = $conn->prepare($sql_reset);
+                if (!$stmt_reset) {
+                    throw new Exception("Database error: " . $conn->error);
+                }
+                $stmt_reset->bind_param("s", $username);
+                $stmt_reset->execute();
+
+                // Store session data in sessions table
+                $session_id = session_id();
+                $user_id = $row['user_id']; // Assuming user_id is in the users table
+                $current_time = date("Y-m-d H:i:s");
+
+                $sql_session = "INSERT INTO sessions (session_id, user_id, created_at, last_activity) VALUES (?, ?, ?, ?)";
+                $stmt_session = $conn->prepare($sql_session);
+                if (!$stmt_session) {
+                    throw new Exception("Database error: " . $conn->error);
+                }
+                $stmt_session->bind_param("siss", $session_id, $user_id, $current_time, $current_time);
+                $stmt_session->execute();
+
+                session_regenerate_id(true);
+                $_SESSION['username'] = $row['username'];
+                $_SESSION['role'] = $row['role'];
+                if ($row['role'] == 'Doctor') {
+                    $_SESSION['doctor_id'] = $row['user_id'];
+                }
+
+                // Log successful login in audit_logs
+                $sql_audit_log = "INSERT INTO audit_logs (username, event_type, ip_address, user_agent) 
+                                  VALUES (?, 'successful_login', ?, ?)";
+                $stmt_audit_log = $conn->prepare($sql_audit_log);
+                if (!$stmt_audit_log) {
+                    throw new Exception("Database error: " . $conn->error);
+                }
+                $stmt_audit_log->bind_param("sss", $username, $_SERVER['REMOTE_ADDR'], $_SERVER['HTTP_USER_AGENT']);
+                $stmt_audit_log->execute();
+
+                // Redirect to dashboard
+                header("Location: index.php");
                 exit();
             } else {
-                $sql_update = "INSERT INTO failed_logins (username, failed_attempts, last_failed_attempt) 
-                               VALUES (?, ?, ?) 
-                               ON DUPLICATE KEY UPDATE 
-                               failed_attempts = VALUES(failed_attempts), 
-                               last_failed_attempt = VALUES(last_failed_attempt)";
-                $stmt_update = $conn->prepare($sql_update);
-                $stmt_update->bind_param("sis", $username, $failed_attempts, $current_time);
-                $stmt_update->execute();
-
-                echo "Invalid username or password. Attempt $failed_attempts of 5.";
+                throw new Exception("Invalid username or password.");
             }
+        } else {
+            throw new Exception("Invalid username or password.");
         }
-    } else {
-        echo "Invalid username or password.";
+    } catch (Exception $e) {
+        // Log the exception message
+        $logMessage = "[$current_time][ERROR] - " . $e->getMessage() . "\n";
+        $logFile = 'log.txt'; // Path to the log file
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+
+        // Display a generic error message
+        echo "An error occurred. Please try again later.";
     }
 }
 
-// Check if user is logged in, otherwise show login form
-if (!isset($_SESSION['role'])) {
-    $show_login_form = true;
-} else {
-    $show_login_form = false;
+
+
+
+
+try {
+    // Check if user is logged in, otherwise show login form
+    if (!isset($_SESSION['role'])) {
+        $show_login_form = true;
+    } else {
+        $show_login_form = false;
+    }
+
+    // Additional code logic here...
+
+} catch (Exception $e) {
+    // Handle any errors that may have occurred
+    echo "An error occurred: " . $e->getMessage();
+    // Optionally log the error to a file
+    $logMessage = "[" . date("Y-m-d H:i:s") . "] [ERROR] - " . $e->getMessage() . "\n";
+    file_put_contents('log.txt', $logMessage, FILE_APPEND);
 }
 
 
-//LOGOUT FROM ALL SESSIONS
-if (isset($_GET['logout_all'])) {
-    $user_id = $_SESSION['user_id']; // Get the user ID
+try{
+	//LOGOUT FROM ALL SESSIONS
+	if (isset($_GET['logout_all'])) {
+		$user_id = $_SESSION['user_id']; // Get the user ID
+		
+		$logMessage = "[$current_time] [INFO] - User $username logged out from all sessions.\n";
+		$fileHandle = fopen('log.txt', 'a');
+		if ($fileHandle) {
+			fwrite($fileHandle, $logMessage);
+			fclose($fileHandle);
+		} else {
+			throw new Exception("Error writing to log file.");
+		}
 
-    // Delete all sessions for the user
-    $sql_delete_sessions = "DELETE FROM sessions WHERE user_id = ?";
-    $stmt_delete_sessions = $conn->prepare($sql_delete_sessions);
-    $stmt_delete_sessions->bind_param("i", $user_id);
-    $stmt_delete_sessions->execute();
+		// Delete all sessions for the user
+		$sql_delete_sessions = "DELETE FROM sessions WHERE user_id = ?";
+		$stmt_delete_sessions = $conn->prepare($sql_delete_sessions);
+		if ($stmt_delete_sessions === false) {
+            throw new Exception("Error preparing SQL statement for session deletion.");
+        }
+		$stmt_delete_sessions->bind_param("i", $user_id);
+		 if (!$stmt_delete_sessions->execute()) {
+            throw new Exception("Error executing session deletion query.");
+        }
+		
+	
+		// Proceed with logging out the current session
+		unset($_SESSION['csrf_token']);
+		session_unset(); // Clear session variables
+		session_destroy(); // Destroy the session on the server
 
-    // Proceed with logging out the current session
-    session_unset(); // Clear session variables
-    session_destroy(); // Destroy the session on the server
-    setcookie(session_name(), '', time() - 3600, '/'); // Delete the session cookie on the client side
 
-    // Redirect to login page
-    header("Location: index.php");
-    exit();
+
+		// Redirect to login page
+		header("Location: index.php");
+		exit();
+	}
+} catch (Exception $e) {
+    // Handle any errors that may have occurred
+    echo "An error occurred: " . $e->getMessage();
+    // Optionally log the error to a file
+    $logMessage = "[" . date("Y-m-d H:i:s") . "] [ERROR] - " . $e->getMessage() . "\n";
+    file_put_contents('log.txt', $logMessage, FILE_APPEND);
 }
 
-//LOGOUT
-if (isset($_GET['logout'])) {
-    session_unset(); // Clear session variables
-    session_destroy(); // Destroy the session file on the server
-    setcookie(session_name(), '', time() - 3600, '/'); // Delete the session cookie on the client side
-    header("Location: index.php"); // Redirect to login page
-    exit();
+try {
+	//LOGOUT
+	if (isset($_GET['logout'])) {
+		$logMessage = "[$current_time] [INFO] - User $username logged out.\n";
+		$fileHandle = fopen('log.txt', 'a');
+		if ($fileHandle) {
+			fwrite($fileHandle, $logMessage);
+			fclose($fileHandle);
+		} else {
+			throw new Exception("Error writing to log file.");
+		}
+		unset($_SESSION['csrf_token']);
+		session_unset(); // Clear session variables
+		session_destroy(); // Destroy the session file on the server
+
+		header("Location: index.php"); // Redirect to login page
+		exit();
+	}
+} catch (Exception $e) {
+    // Handle any errors that may have occurred
+    echo "An error occurred: " . $e->getMessage();
+    
+    // Optionally log the error to a file
+    $logMessage = "[" . date("Y-m-d H:i:s") . "] [ERROR] - " . $e->getMessage() . "\n";
+    file_put_contents('log.txt', $logMessage, FILE_APPEND);
 }
 
 //RECEPTIONIST
@@ -293,7 +495,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_type']) && $_POS
     $stmt->bind_param("ssssssss", $patient_id, $first_name, $last_name, $dob, $gender, $address, $phone, $email);
 
     if ($stmt->execute()) {
+		$logMessage = "[$current_time][INFO][RECEPTIONIST] - New patient record created: $first_name $last_name (Patient ID: $patient_id)\n";
+        $logFile = 'log.txt'; // Path to the log file
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
         echo "New patient record created successfully.";
+		unset($_SESSION['csrf_token']);
     } else {
         echo "Error: " . $stmt->error;
     }
@@ -343,6 +555,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $stmt->bind_param("ssssss", $appointment_id, $patient_id, $doctor_id, $appointment_date, $reason, $status);
 
         if ($stmt->execute()) {
+            $logMessage = "[$current_time][INFO][RECEPTIONIST] - New appointment created: Appointment ID: $appointment_id, Patient ID: $patient_id, Doctor ID: $doctor_id, Appointment Date: $appointment_date, Status: $status\n";
+            $logFile = 'log.txt'; // Path to the log file
+            $fileHandle = fopen($logFile, 'a');
+            if ($fileHandle) {
+                fwrite($fileHandle, $logMessage);
+                fclose($fileHandle);
+            } else {
+                echo "Error writing to log file.";
+            }
             echo "Appointment record created successfully.";
         } else {
             echo "Error: " . $stmt->error;
@@ -365,6 +586,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['patient_id'])) {
 
     // Validate Patient ID format server-side
     if (preg_match('/^PID\d{5}$/', $patient_id)) {
+		
+		$logMessage = "[$current_time][INFO][Doctor]  - Valid Patient ID format: $patient_id\n";
+        $logFile = 'log.txt'; // Path to the log file
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+		
         // Fetch records from the database with only patient_id (no doctor_id)
         $query = "SELECT visit_date, diagnosis, treatment, notes, doctor_id
                   FROM records 
@@ -377,16 +609,50 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['patient_id'])) {
 
             if ($result->num_rows > 0) {
                 $records = $result->fetch_all(MYSQLI_ASSOC);
+				
+				$logMessage = "[$current_time][INFO][Doctor]  - Records retrieved for Patient ID: $patient_id\n";
+                $fileHandle = fopen($logFile, 'a');
+                if ($fileHandle) {
+                    fwrite($fileHandle, $logMessage);
+                    fclose($fileHandle);
+                } else {
+                    echo "Error writing to log file.";
+                }
             } else {
                 // Debugging message if no records are found
                 echo "No records found for Patient ID: $patient_id"; // Check the reason 
+				
+				$logMessage = "[$current_time][WARN][Doctor]  - No records found for Patient ID: $patient_id\n";
+                $fileHandle = fopen($logFile, 'a');
+                if ($fileHandle) {
+                    fwrite($fileHandle, $logMessage);
+                    fclose($fileHandle);
+                } else {
+                    echo "Error writing to log file.";
+                }
             }
             $stmt->close();
         } else {
             $error_message = "Database query failed.";
+			$logMessage = "[$current_time][ERROR][Doctor]  - Database query failed for Patient ID: $patient_id\n";
+            $fileHandle = fopen($logFile, 'a');
+            if ($fileHandle) {
+                fwrite($fileHandle, $logMessage);
+                fclose($fileHandle);
+            } else {
+                echo "Error writing to log file.";
+            }
         }
     } else {
         $error_message = "Invalid Patient ID format. Please use the format PID followed by 5 digits (e.g., PID12345).";
+		$logMessage = "[$current_time][ERROR][Doctor] - Invalid Patient ID format: $patient_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
 }
 
@@ -402,6 +668,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_type']) && $_POS
 
     // Validate Patient ID format
     if (preg_match('/^PID\d{5}$/', $patient_id)) {
+		
+		$logMessage = "[$current_time][INFO][DOCTOR] - Valid Patient ID format: $patient_id\n";
+        $logFile = 'log.txt'; // Path to the log file
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+		
         // Prepare SQL statement to insert the new record
         $query = "INSERT INTO records (patient_id, doctor_id, visit_date, diagnosis, treatment, notes) 
                   VALUES (?, ?, ?, ?, ?, ?)";
@@ -413,15 +690,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['form_type']) && $_POS
             // Execute the query
             if ($stmt->execute()) {
                 $success_message = "New record added successfully!";
+				$logMessage = "[$current_time][INFO][DOCTOR] - New record added for Patient ID: $patient_id by Doctor ID: $doctor_id\n";
+                $fileHandle = fopen($logFile, 'a');
+                if ($fileHandle) {
+                    fwrite($fileHandle, $logMessage);
+                    fclose($fileHandle);
+                } else {
+                    echo "Error writing to log file.";
+                }
             } else {
                 $error_message = "Failed to add the record. Please try again.";
+				$logMessage = "[$current_time][ERROR][DOCTOR] - Failed to add record for Patient ID: $patient_id\n";
+                $fileHandle = fopen($logFile, 'a');
+                if ($fileHandle) {
+                    fwrite($fileHandle, $logMessage);
+                    fclose($fileHandle);
+                } else {
+                    echo "Error writing to log file.";
+                }
             }
             $stmt->close();
         } else {
             $error_message = "Database query failed.";
+			$logMessage = "[$current_time][ERROR][DOCTOR] - Database query failed while adding record for Patient ID: $patient_id\n";
+            $fileHandle = fopen($logFile, 'a');
+            if ($fileHandle) {
+                fwrite($fileHandle, $logMessage);
+                fclose($fileHandle);
+            } else {
+                echo "Error writing to log file.";
+            }
         }
     } else {
         $error_message = "Invalid Patient ID format. Please use the format PID followed by 5 digits (e.g., PID12345).";
+		 $logMessage = "[$current_time][ERROR][DOCTOR] - Invalid Patient ID format: $patient_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
 }
 
@@ -432,15 +741,21 @@ if (isset($_POST['add_user'])) {
     $password = $_POST['password'];
     $role = $_POST['role'];
 
+    // Check for missing required fields
+    if (empty($username) || empty($password) || empty($role)) {
+        echo "Please fill all the required fields.";
+        exit();
+    }
+
     // Sanitize and format full name (only if provided)
-    $full_name = $_POST['full_name'];
+    $full_name = isset($_POST['full_name']) ? $_POST['full_name'] : '';
     if (!empty($full_name)) {
         $full_name = preg_replace("/[^a-zA-Z\s.]/", "", $full_name); // Remove invalid characters
-        $full_name = ucwords(strtolower($full_name)); // Convert to lowercase and then capitalize first letters
+        $full_name = ucwords(strtolower($full_name)); // Capitalize first letters
     }
 
     // Validate email (only if provided)
-    $email = $_POST['email'];
+    $email = isset($_POST['email']) ? $_POST['email'] : '';
     if (!empty($email)) {
         $email = strtolower(str_replace(' ', '', $email)); // Convert to lowercase and remove spaces
         if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
@@ -450,12 +765,18 @@ if (isset($_POST['add_user'])) {
     }
 
     // Validate phone number (only if provided)
-    $phone_number = $_POST['phone_number'];
+    $phone_number = isset($_POST['phone_number']) ? $_POST['phone_number'] : '';
     if (!empty($phone_number)) {
         if (!preg_match("/^\d{11}$/", $phone_number)) {
             echo "Phone number must be exactly 11 digits.";
             exit; // Stop execution if phone number is invalid
         }
+    }
+
+    // Password strength check (optional but recommended)
+    if (strlen($password) < 8) {
+        echo "Password must be at least 8 characters long.";
+        exit();
     }
 
     // Hash the password using bcrypt
@@ -470,11 +791,20 @@ if (isset($_POST['add_user'])) {
 
     // Execute the query
     if ($stmt->execute()) {
+		$logMessage = "[$current_time][INFO][ADMIN] - User created successfully: $username with role: $role\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
         echo "User added successfully.";
     } else {
         echo "Error: " . $conn->error;
     }
 }
+
 
 
 //USER TABLE
@@ -490,8 +820,24 @@ if (isset($_GET['delete_user_id'])) {
     // Execute the query
     if ($stmt->execute()) {
         echo "<script>alert('User deleted successfully!'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - User deleted successfully: User ID $delete_user_id\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "<script>alert('Failed to delete user. Please try again.');</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to delete User ID: $delete_user_id\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
 
     $stmt->close(); 
@@ -510,8 +856,24 @@ if (isset($_GET['edit_user_id'])) {
 
     if ($result->num_rows > 0) {
         $edit_user = $result->fetch_assoc();
+		$logMessage = "[$current_time][INFO][ADMIN] - Retrieved details for User ID: $edit_user_id\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "<script>alert('User not found.'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - User not found: User ID $edit_user_id\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
 
     $stmt->close();
@@ -549,6 +911,11 @@ if (isset($_POST['update_user'])) {
         }
     }
 
+	if (strlen($password) < 8) {
+        echo "Password must be at least 8 characters long.";
+        exit();
+    }
+		
     $password = $_POST['password']; 
 
     // Update the user info
@@ -568,8 +935,24 @@ if (isset($_POST['update_user'])) {
     if ($stmt->execute()) {
         $userUpdated = true;
         echo "User updated successfully.";
+		 $logMessage = "[$current_time][INFO][ADMIN] - User updated successfully: $username (User ID: $user_id) with role: $role\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "Error: " . $conn->error;
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to update user: $username (User ID: $user_id). Error: $error_message\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
 }
 
@@ -585,8 +968,25 @@ if (isset($_GET['delete_patient_id'])) {
     
     if ($stmt->execute()) {
         echo "<script>alert('Patient deleted successfully'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - Patient deleted successfully: Patient ID $patient_id_to_delete\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+		
     } else {
         echo "<script>alert('Error deleting patient');</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to delete patient: Patient ID $patient_id_to_delete. Error: $error_message\n";
+		$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
     $stmt->close();
 }
@@ -598,10 +998,31 @@ if (isset($_GET['edit_patient_id'])) {
     $edit_patient_query = "SELECT * FROM patients WHERE patient_id = ?";
     $stmt = $conn->prepare($edit_patient_query);
     $stmt->bind_param("s", $patient_id);
-    $stmt->execute();
+	
+    if($stmt->execute()){
     $result = $stmt->get_result();
     $edit_patient = $result->fetch_assoc();
-    $stmt->close();
+	
+	$logMessage = "[$current_time][INFO][ADMIN] - Retrieved patient details for editing: Patient ID $patient_id\n";
+	$fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+		}else {
+			$error_message = $conn->error;
+			$logMessage = "[$current_time][ERROR][ADMIN] - Failed to retrieve patient details: Patient ID $patient_id. Error: $error_message\n";
+			$fileHandle = fopen($logFile, 'a');
+				if ($fileHandle) {
+					fwrite($fileHandle, $logMessage);
+					fclose($fileHandle);
+				} else {
+					echo "Error writing to log file.";
+				}
+		}
+	$stmt->close();
 }
 
 //update patient information
@@ -624,7 +1045,7 @@ if (isset($_POST['update_patient'])) {
 
     
     if (!preg_match("/^\+?[0-9]{11}$/", $phone_number)) {
-        echo "<script>alert('Invalid phone number. Please enter a valid 10-digit phone number.'); window.history.back();</script>";
+        echo "<script>alert('Invalid phone number. Please enter a valid 11-digit phone number.'); window.history.back();</script>";
         exit;
     }
 
@@ -642,8 +1063,24 @@ if (isset($_POST['update_patient'])) {
     
     if ($stmt->execute()) {
         echo "<script>alert('Patient updated successfully'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - Patient updated successfully: Patient ID $patient_id\n";
+		$fileHandle = fopen($logFile, 'a');
+		if ($fileHandle) {
+			fwrite($fileHandle, $logMessage);
+			fclose($fileHandle);
+		} else {
+			echo "Error writing to log file.";
+		}
     } else {
         echo "<script>alert('Error updating patient. Please try again later.');</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to update patient: Patient ID $patient_id. Error: $error_message\n";
+		$fileHandle = fopen($logFile, 'a');
+		if ($fileHandle) {
+			fwrite($fileHandle, $logMessage);
+			fclose($fileHandle);
+		} else {
+			echo "Error writing to log file.";
+		}
     }
     $stmt->close();
 }
@@ -659,8 +1096,24 @@ if (isset($_GET['delete_appointment_id'])) {
 
     if ($stmt->execute()) {
         echo "<script>alert('Appointment deleted successfully'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - Appointment deleted successfully: Appointment ID $appointment_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "<script>alert('Error deleting appointment');</script>";
+		 $logMessage = "[$current_time][ERROR][ADMIN] - Failed to delete appointment: Appointment ID $appointment_id. Error: $error_message\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
     $stmt->close();
 }
@@ -671,9 +1124,29 @@ if (isset($_GET['edit_appointment_id'])) {
     $edit_appointment_query = "SELECT * FROM appointments WHERE appointment_id = ?";
     $stmt = $conn->prepare($edit_appointment_query);
     $stmt->bind_param("s", $appointment_id);
-    $stmt->execute();
+	
+    if($stmt->execute()){
     $result = $stmt->get_result();
     $edit_appointment = $result->fetch_assoc();
+	$logMessage = "[$current_time][INFO][ADMIN] - Retrieved appointment details for editing: Appointment ID $appointment_id\n";
+    $fileHandle = fopen($logFile, 'a');
+		if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+	} else{
+		$error_message = $conn->error;
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to retrieve appointment details for Appointment ID $appointment_id. Error: $error_message\n";
+		$fileHandle = fopen($logFile, 'a');
+		if ($fileHandle) {
+			fwrite($fileHandle, $logMessage);
+			fclose($fileHandle);
+		} else {
+			echo "Error writing to log file.";
+		}
+	}
     $stmt->close();
 }
 
@@ -697,8 +1170,24 @@ if (isset($_POST['update_appointment'])) {
 
     if ($stmt->execute()) {
         echo "<script>alert('Appointment updated successfully'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - Appointment updated successfully: Appointment ID $appointment_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "<script>alert('Error updating appointment');</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to update appointment: Appointment ID $appointment_id. Error: $error_message\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
     $stmt->close();
 }
@@ -714,8 +1203,24 @@ if (isset($_GET['delete_record_id'])) {
 
     if ($stmt->execute()) {
         echo "<script>alert('Record deleted successfully'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - Record deleted successfully: Record ID $record_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "<script>alert('Error deleting record');</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to delete record: Record ID $record_id. Error: $error_message\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
     $stmt->close();
 }
@@ -726,9 +1231,30 @@ if (isset($_GET['edit_record_id'])) {
     $edit_record_query = "SELECT * FROM records WHERE record_id = ?";
     $stmt = $conn->prepare($edit_record_query);
     $stmt->bind_param("s", $record_id);
-    $stmt->execute();
+	
+	
+    if($stmt->execute()){
     $result = $stmt->get_result();
     $edit_record = $result->fetch_assoc();
+	$logMessage = "[$current_time][INFO][ADMIN] - Retrieved record details for editing: Record ID $record_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+	}else{
+		$error_message = $conn->error;
+        $logMessage = "[$current_time][ERROR][ADMIN] - Failed to retrieve record details: Record ID $record_id. Error: $error_message\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
+	}
     $stmt->close();
 }
 
@@ -753,8 +1279,24 @@ if (isset($_POST['update_record'])) {
 
     if ($stmt->execute()) {
         echo "<script>alert('Record updated successfully'); window.location.href = 'index.php';</script>";
+		$logMessage = "[$current_time][INFO][ADMIN] - Updated record: Record ID $record_id\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     } else {
         echo "<script>alert('Error updating record');</script>";
+		$logMessage = "[$current_time][ERROR][ADMIN] - Failed to update record: Record ID $record_id. Error: $error_message\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
     }
     $stmt->close();
 }
@@ -775,6 +1317,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_report'])) {
         $stmt->execute();
         $report_data['users'] = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
+		
+		$logMessage = "[$current_time][INFO][ADMIN] - Fetched users data for report between $date_from and $date_to\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
 
         // Fetch Patients
         $query_patients = "SELECT * FROM patients WHERE created_at BETWEEN ? AND ?";
@@ -783,6 +1334,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_report'])) {
         $stmt->execute();
         $report_data['patients'] = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
+		
+		$logMessage = "[$current_time][INFO][ADMIN] - Fetched patients data for report between $date_from and $date_to\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
 
         // Fetch Appointments
         $query_appointments = "SELECT * FROM appointments WHERE created_at BETWEEN ? AND ?";
@@ -791,6 +1351,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_report'])) {
         $stmt->execute();
         $report_data['appointments'] = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
+		
+		$logMessage = "[$current_time][INFO][ADMIN] - Fetched appointments data for report between $date_from and $date_to\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
 
         // Fetch Records
         $query_records = "SELECT * FROM records WHERE created_at BETWEEN ? AND ?";
@@ -799,6 +1368,15 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_report'])) {
         $stmt->execute();
         $report_data['records'] = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
         $stmt->close();
+		
+		$logMessage = "[$current_time][INFO][ADMIN] - Fetched records data for report between $date_from and $date_to\n";
+        $fileHandle = fopen($logFile, 'a');
+        if ($fileHandle) {
+            fwrite($fileHandle, $logMessage);
+            fclose($fileHandle);
+        } else {
+            echo "Error writing to log file.";
+        }
 
     } else {
         echo "<script>alert('Please select a valid date range.');</script>";
@@ -813,8 +1391,13 @@ if ($_SERVER['REQUEST_METHOD'] == 'POST' && isset($_POST['generate_report'])) {
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.7.1/css/all.min.css">
         <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet" />
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js"></script>
-        <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js" 
+				integrity="sha384-KyZXEAg3QhqLMpG8r+Knujsl5+5hb7x2mXKzJ5x5U5PA5M/Ub52zYOhF+prc4d6z" 
+				crossorigin="anonymous"></script>
+
+		<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"
+				integrity="sha384-4qNfl5l7qYy3qiyNTqTHKJ0z3eb4k9PoX4m3VVJv+2Zm10f5t3X4pAp8DjJw3Jv9"
+				crossorigin="anonymous"></script>
         
         <link rel="icon" href="logo.png" type="image/png">
         <title>Hikari Care</title>
@@ -983,7 +1566,7 @@ textarea {
     </head>
     <body>
         
-        <!-- Show login form if the user is not logged in -->
+        <!-- LOG IN-->
         <?php if ($show_login_form) { ?>
             <nav class="container" id="login">
             <img src="full_logo.png" alt="Hikari Care Logo" class="logo">
@@ -1072,94 +1655,91 @@ textarea {
 
                     <!--APPOINTMENT-->
                     <form method="POST" style="background: #fff; width: auto; padding: 1rem; margin: 50px auto; border-radius: 10px; box-shadow: 0 20px 35px rgba(0, 0, 1, 0.9);">
-    <input type="hidden" name="form_type" value="new_appointment">
-    <h3>APPOINTMENT</h3>
-    <table>
-        <tr>
-            <th>Appointment ID</th>
-            <th>Patient</th>
-            <th>Doctor</th>
-            <th>Appointment Date</th>
-            <th>Reason</th>
-            <th>Status</th>
-        </tr>
-        <tr>
-            <!-- Appointment ID -->
-            <td>
-                <input type="hidden" name="appointment_id" value="<?php echo $appointmentID; ?>" />
-                <span><?php echo $appointmentID; ?></span>
-            </td>
+					<input type="hidden" name="form_type" value="new_appointment">
+					<h3>APPOINTMENT</h3>
+					<table>
+						<tr>
+							<th>Appointment ID</th>
+							<th>Patient</th>
+							<th>Doctor</th>
+							<th>Appointment Date</th>
+							<th>Reason</th>
+							<th>Status</th>
+						</tr>
+						<tr>
+							<!-- Appointment ID -->
+							<td>
+								<input type="hidden" name="appointment_id" value="<?php echo $appointmentID; ?>" />
+								<span><?php echo $appointmentID; ?></span>
+							</td>
 
-            <!-- Patient Dropdown -->
-            <td>
-                &emsp;
-                <select name="patient_id" class="select2" required>
-                    <option value="">Select Patient</option>
-                    <?php 
-                    if ($patients_result->num_rows > 0) {
-                        while ($patient = $patients_result->fetch_assoc()) { ?>
-                            <option value="<?php echo $patient['patient_id']; ?>">
-                                <?php echo htmlspecialchars($patient['first_name'] . ' ' . $patient['last_name']); ?>
-                            </option>
-                        <?php } 
-                    } ?>
-                </select>
-            </td>
+							<!-- Patient Dropdown -->
+							<td>
+								&emsp;
+								<select name="patient_id" class="select2" required>
+									<option value="">Select Patient</option>
+									<?php 
+									if ($patients_result->num_rows > 0) {
+										while ($patient = $patients_result->fetch_assoc()) { ?>
+											<option value="<?php echo $patient['patient_id']; ?>">
+												<?php echo htmlspecialchars($patient['first_name'] . ' ' . $patient['last_name']); ?>
+											</option>
+										<?php } 
+									} ?>
+								</select>
+							</td>
 
-            <!-- Doctor Dropdown -->
-            <td>
-                &emsp;
-                <select name="doctor_id" required>
-                    <option value="">Select Doctor</option>
-                    <?php 
-                    if ($doctors_result->num_rows > 0) {
-                        while ($doctor = $doctors_result->fetch_assoc()) { ?>
-                            <option value="<?php echo $doctor['user_id']; ?>">
-                                <?php echo htmlspecialchars($doctor['full_name']); ?>
-                            </option>
-                        <?php } 
-                    } ?>
-                </select>
-            </td>
+							<!-- Doctor Dropdown -->
+							<td>
+								&emsp;
+								<select name="doctor_id" required>
+									<option value="">Select Doctor</option>
+									<?php 
+									if ($doctors_result->num_rows > 0) {
+										while ($doctor = $doctors_result->fetch_assoc()) { ?>
+											<option value="<?php echo $doctor['user_id']; ?>">
+												<?php echo htmlspecialchars($doctor['full_name']); ?>
+											</option>
+										<?php } 
+									} ?>
+								</select>
+							</td>
 
-            <!-- Appointment Date -->
-            <td>
-                &emsp;
-                <input type="datetime-local" name="appointment_date" required />
-            </td>
+							<!-- Appointment Date -->
+							<td>
+								&emsp;
+								<input type="datetime-local" name="appointment_date" required />
+							</td>
 
-            <!-- Reason -->
-            <td>
-                &emsp;
-                &emsp;
-                &emsp;
-                &emsp;
-                <input type="text" name="reason" required />
-            </td>
+							<!-- Reason -->
+							<td>
+								&emsp;
+								&emsp;
+								&emsp;
+								&emsp;
+								<input type="text" name="reason" required />
+							</td>
 
-            <!-- Status -->
-            <td>
-                &emsp;
-                <select name="status" required>
-                    <option value="Scheduled">Scheduled</option>
-                    <option value="Completed">Completed</option>
-                    <option value="Canceled">Canceled</option>
-                </select>
-            </td>
-        </tr>
-    </table>
-    <button type="submit" class="btn">Submit</button>
-</form>
+							<!-- Status -->
+							<td>
+								&emsp;
+								<select name="status" required>
+									<option value="Scheduled">Scheduled</option>
+									<option value="Completed">Completed</option>
+									<option value="Canceled">Canceled</option>
+								</select>
+							</td>
+						</tr>
+					</table>
+					<button type="submit" class="btn">Submit</button>
+				</form>
 
-<!-- Initialize Select2 -->
-<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
-<link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet" />
-<script>
-$(document).ready(function() {
-    $('.select2').select2();
-});
-</script>
+				<!-- Initialize Select2 -->
+				<script>
+				$(document).ready(function() {
+					$('.select2').select2();
+				});
+				</script>
 
 
                     <!-- APPOINTMENT TABLE -->
@@ -1464,7 +2044,7 @@ $(document).ready(function() {
 
                                     <div class="input-group">
                                         <label for="phone_number">Phone Number:</label>
-                                        <input type="tel" id="phone_number" name="phone_number" value="<?php echo htmlspecialchars($edit_patient['phone_number']); ?>" pattern="^\+?[0-9]{10}$" title="Phone number must be 10 digits" required><br><br>
+                                        <input type="tel" id="phone_number" name="phone_number" value="<?php echo htmlspecialchars($edit_patient['phone_number']); ?>" pattern="^\+?[0-9]{11}$" title="Phone number must be 10 digits" required><br><br>
                                     </div>
 
                                     <div class="input-group">
@@ -1716,7 +2296,7 @@ $(document).ready(function() {
 
                                     <div class="input-group">
                                         <label for="phone_number">Phone Number:</label>
-                                        <input type="tel" id="phone_number" name="phone_number" value="<?php echo htmlspecialchars($edit_patient['phone_number']); ?>" pattern="^\+?[0-9]{10}$" title="Phone number must be 10 digits" required><br><br>
+                                        <input type="tel" id="phone_number" name="phone_number" value="<?php echo htmlspecialchars($edit_patient['phone_number']); ?>" pattern="^\+?[0-9]{11}$" title="Phone number must be 10 digits" required><br><br>
                                     </div>
 
                                     <div class="input-group">
